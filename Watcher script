@@ -1,53 +1,120 @@
-# Watcher - Step 1 test: runs the standalone Update AA script with fixed test values
+# Watcher - Step 3: watches the Helpers folder for request (.json) files and runs Update AA
 
 $AccessDatabasePath = "C:\Path\To\Your\Database.accdb"   # <-- Update this path
-$TestClientName     = "Smith"                            # <-- Client Name exactly as in Access
-$TestDate           = "10/31/2026"                       # <-- M/D/YYYY
-$TestReportType     = "Quarterly"                        # <-- Quarterly or Monthly
-$OutputFolder       = "C:\Users\you\Company\Site - Documents\AA Agent\Runs"   # <-- Synced SharePoint Runs folder
 
-$updateAAScriptPath = $null
-$connection = $null
-$recordset = $null
+# Reads a single Variable Value from the Access Settings table
+function Get-Setting {
+    param([string]$Name)
 
-try {
-    $connection = New-Object -ComObject ADODB.Connection
-    $recordset  = New-Object -ComObject ADODB.Recordset
+    $value = $null
+    $connection = $null
+    $recordset = $null
 
-    $connection.Open("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$AccessDatabasePath")
-    $recordset.Open("SELECT [Variable Value] FROM [Settings] WHERE [Variable Name]='Interface Button Update AA'", $connection)
+    try {
+        $connection = New-Object -ComObject ADODB.Connection
+        $recordset  = New-Object -ComObject ADODB.Recordset
 
-    if (-not $recordset.EOF) {
-        $updateAAScriptPath = [string]$recordset.Fields.Item("Variable Value").Value
+        $connection.Open("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$AccessDatabasePath")
+        $recordset.Open("SELECT [Variable Value] FROM [Settings] WHERE [Variable Name]='$Name'", $connection)
+
+        if (-not $recordset.EOF) {
+            $value = [string]$recordset.Fields.Item("Variable Value").Value
+        }
+    }
+    catch {
+        Write-Host ("Error reading Settings ({0}): {1}" -f $Name, $_.Exception.Message)
+    }
+    finally {
+        try { if ($recordset -and $recordset.State -eq 1) { $recordset.Close() } } catch {}
+        try { if ($connection -and $connection.State -eq 1) { $connection.Close() } } catch {}
+
+        if ($recordset)  { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset) | Out-Null } catch {} }
+        if ($connection) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($connection) | Out-Null } catch {} }
+    }
+
+    return $value
+}
+
+# Shows a line in the console and appends it to the request's output file
+function Write-RunLine {
+    param([string]$OutputPath, [string]$Line)
+
+    Write-Host $Line
+    Add-Content -Path $OutputPath -Value $Line -Encoding UTF8
+}
+
+# Reads one request file, removes it, validates its values, and runs the requested action
+function Invoke-Request {
+    param([string]$RequestPath)
+
+    $outputPath = [System.IO.Path]::ChangeExtension($RequestPath, '.txt')
+
+    try {
+        $request = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        Write-RunLine $outputPath ("ERROR: COULD NOT READ REQUEST FILE: {0}" -f $_.Exception.Message)
+        Remove-Item -Path $RequestPath -ErrorAction SilentlyContinue
+        return
+    }
+
+    Remove-Item -Path $RequestPath -ErrorAction SilentlyContinue
+
+    if ($request.action -ne 'UpdateAA') {
+        Write-RunLine $outputPath ("ERROR: UNKNOWN ACTION: {0}" -f $request.action)
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($request.client)) {
+        Write-RunLine $outputPath "ERROR: NO CLIENT NAME IN REQUEST"
+        return
+    }
+
+    try {
+        [datetime]::ParseExact($request.date, 'M/d/yyyy', $null) | Out-Null
+    }
+    catch {
+        Write-RunLine $outputPath ("ERROR: INVALID DATE (EXPECTED M/D/YYYY): {0}" -f $request.date)
+        return
+    }
+
+    if ($request.reportType -notin @('Quarterly', 'Monthly')) {
+        Write-RunLine $outputPath ("ERROR: INVALID REPORT TYPE (EXPECTED QUARTERLY OR MONTHLY): {0}" -f $request.reportType)
+        return
+    }
+
+    $clientArg = ([string]$request.client).Replace("'", "''")
+    $psCmd = "& '$updateAAScriptPath' -AccessDatabasePath '$AccessDatabasePath' -DateNewReport '$($request.date)' -ClientNames '$clientArg' -ReportType '$($request.reportType)' 2>&1"
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $psCmd 2>&1 | ForEach-Object {
+        Write-RunLine $outputPath ([string]$_)
     }
 }
-catch {
-    Write-Output ("Error reading Settings: {0}" -f $_.Exception.Message)
-}
-finally {
-    try { if ($recordset -and $recordset.State -eq 1) { $recordset.Close() } } catch {}
-    try { if ($connection -and $connection.State -eq 1) { $connection.Close() } } catch {}
 
-    if ($recordset)  { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset) | Out-Null } catch {} }
-    if ($connection) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($connection) | Out-Null } catch {} }
-}
+$updateAAScriptPath = Get-Setting 'Interface Button Update AA'
+$helperFolder       = Get-Setting 'Watcher Helper'
 
 if ([string]::IsNullOrWhiteSpace($updateAAScriptPath) -or -not (Test-Path $updateAAScriptPath)) {
-    Write-Output "Update AA script path is blank or not found: $updateAAScriptPath"
+    Write-Host "Update AA script path is blank or not found: $updateAAScriptPath"
     exit
 }
 
-$psCmd = "& '$updateAAScriptPath' -AccessDatabasePath '$AccessDatabasePath' -DateNewReport '$TestDate' -ClientNames '$TestClientName' -ReportType '$TestReportType' 2>&1"
-
-if (-not (Test-Path $OutputFolder)) {
-    Write-Output "Output folder not found: $OutputFolder"
+if ([string]::IsNullOrWhiteSpace($helperFolder) -or -not (Test-Path $helperFolder)) {
+    Write-Host "Watcher Helper folder is blank or not found: $helperFolder"
     exit
 }
 
-$outputPath = Join-Path $OutputFolder ("UpdateAA_{0}_{1}.txt" -f $env:USERNAME, (Get-Date -Format "yyyyMMdd-HHmmss"))
+$watcher = New-Object System.IO.FileSystemWatcher $helperFolder, '*.json'
 
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $psCmd 2>&1 | ForEach-Object {
-    $line = [string]$_
-    $line
-    Add-Content -Path $outputPath -Value $line -Encoding UTF8
+Write-Host "Watching $helperFolder for requests. Press Stop to end."
+
+while ($true) {
+    foreach ($file in (Get-ChildItem -Path $helperFolder -Filter '*.json' | Sort-Object CreationTime)) {
+        Start-Sleep -Seconds 2
+        if (Test-Path $file.FullName) {
+            Invoke-Request -RequestPath $file.FullName
+        }
+    }
+
+    $watcher.WaitForChanged([System.IO.WatcherChangeTypes]::Created, 1000) | Out-Null
 }
