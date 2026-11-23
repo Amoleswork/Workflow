@@ -33,12 +33,9 @@ finally {
 
 if ([string]::IsNullOrWhiteSpace($updateAAScriptPath) -or -not (Test-Path $updateAAScriptPath)) {
     Write-Output "Update AA script path is blank or not found: $updateAAScriptPath"
-    Read-Host "Press Enter to close"
     exit
 }
 
 $psCmd = "& '$updateAAScriptPath' -AccessDatabasePath '$AccessDatabasePath' -DateNewReport '$TestDate' -ClientNames '$TestClientName' -ReportType '$TestReportType' 2>&1"
 
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $psCmd
-
-Read-Host "Test finished. Press Enter to close"
