@@ -1,0 +1,44 @@
+# Watcher - Step 1 test: runs the standalone Update AA script with fixed test values
+
+$AccessDatabasePath = "C:\Path\To\Your\Database.accdb"   # <-- Update this path
+$TestClientName     = "Smith"                            # <-- Client Name exactly as in Access
+$TestDate           = "10/31/2026"                       # <-- M/D/YYYY
+$TestReportType     = "Quarterly"                        # <-- Quarterly or Monthly
+
+$updateAAScriptPath = $null
+$connection = $null
+$recordset = $null
+
+try {
+    $connection = New-Object -ComObject ADODB.Connection
+    $recordset  = New-Object -ComObject ADODB.Recordset
+
+    $connection.Open("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$AccessDatabasePath")
+    $recordset.Open("SELECT [Variable Value] FROM [Settings] WHERE [Variable Name]='Interface Button Update AA'", $connection)
+
+    if (-not $recordset.EOF) {
+        $updateAAScriptPath = [string]$recordset.Fields.Item("Variable Value").Value
+    }
+}
+catch {
+    Write-Output ("Error reading Settings: {0}" -f $_.Exception.Message)
+}
+finally {
+    try { if ($recordset -and $recordset.State -eq 1) { $recordset.Close() } } catch {}
+    try { if ($connection -and $connection.State -eq 1) { $connection.Close() } } catch {}
+
+    if ($recordset)  { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset) | Out-Null } catch {} }
+    if ($connection) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($connection) | Out-Null } catch {} }
+}
+
+if ([string]::IsNullOrWhiteSpace($updateAAScriptPath) -or -not (Test-Path $updateAAScriptPath)) {
+    Write-Output "Update AA script path is blank or not found: $updateAAScriptPath"
+    Read-Host "Press Enter to close"
+    exit
+}
+
+$psCmd = "& '$updateAAScriptPath' -AccessDatabasePath '$AccessDatabasePath' -DateNewReport '$TestDate' -ClientNames '$TestClientName' -ReportType '$TestReportType' 2>&1"
+
+Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command', $psCmd) -NoNewWindow -Wait
+
+Read-Host "Test finished. Press Enter to close"
