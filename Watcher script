@@ -4,6 +4,7 @@ $AccessDatabasePath = "C:\Path\To\Your\Database.accdb"   # <-- Update this path
 $TestClientName     = "Smith"                            # <-- Client Name exactly as in Access
 $TestDate           = "10/31/2026"                       # <-- M/D/YYYY
 $TestReportType     = "Quarterly"                        # <-- Quarterly or Monthly
+$OutputFolder       = "C:\Users\you\Company\Site - Documents\AA Agent\Runs"   # <-- Synced SharePoint Runs folder
 
 $updateAAScriptPath = $null
 $connection = $null
@@ -38,4 +39,15 @@ if ([string]::IsNullOrWhiteSpace($updateAAScriptPath) -or -not (Test-Path $updat
 
 $psCmd = "& '$updateAAScriptPath' -AccessDatabasePath '$AccessDatabasePath' -DateNewReport '$TestDate' -ClientNames '$TestClientName' -ReportType '$TestReportType' 2>&1"
 
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $psCmd
+if (-not (Test-Path $OutputFolder)) {
+    Write-Output "Output folder not found: $OutputFolder"
+    exit
+}
+
+$outputPath = Join-Path $OutputFolder ("UpdateAA_{0}_{1}.txt" -f $env:USERNAME, (Get-Date -Format "yyyyMMdd-HHmmss"))
+
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $psCmd 2>&1 | ForEach-Object {
+    $line = [string]$_
+    $line
+    Add-Content -Path $outputPath -Value $line -Encoding UTF8
+}
