@@ -51,7 +51,15 @@ function Invoke-Request {
     $folderName = Split-Path -Path $FolderPath -Leaf
     $outputPath = Join-Path $helperFolder ($folderName + '_result.txt')
 
-    Remove-Item -Path $FolderPath -ErrorAction SilentlyContinue
+    try {
+        [System.IO.Directory]::Delete($FolderPath)
+    }
+    catch {}
+
+    if (Test-Path $FolderPath) {
+        Write-RunLine $outputPath ("ERROR: COULD NOT DELETE REQUEST FOLDER - WATCHER STOPPED: {0}" -f $folderName)
+        exit
+    }
 
     $parts = $folderName -split '__'
 
@@ -120,8 +128,10 @@ while ($true) {
         Sort-Object CreationTime
 
     foreach ($folder in $requestFolders) {
+        Write-Host ("Found folder: {0} - waiting 15 seconds" -f $folder.Name)
         Start-Sleep -Seconds 15
         if (Test-Path $folder.FullName) {
+            Write-Host ("Handling request: {0}" -f $folder.Name)
             Invoke-Request -FolderPath $folder.FullName
         }
     }
