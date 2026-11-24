@@ -1,4 +1,4 @@
-# Watcher - Step 3: watches the Helpers folder for request (_request.txt) files and runs Update AA
+# Watcher - Step 3: watches the Helpers folder for request folders (values in the folder name) and runs Update AA
 
 $AccessDatabasePath = "C:\Path\To\Your\Database.accdb"   # <-- Update this path
 
@@ -43,48 +43,53 @@ function Write-RunLine {
     Add-Content -Path $OutputPath -Value $Line -Encoding UTF8
 }
 
-# Reads one request file, removes it, validates its values, and runs the requested action
+# Reads one request folder's name, removes the folder, validates its values, and runs the requested action
+# Folder name pattern: Action__User__Client__Date(M-D-YYYY)__ReportType__Timestamp
 function Invoke-Request {
-    param([string]$RequestPath)
+    param([string]$FolderPath)
 
-    $outputPath = $RequestPath -replace '_request\.txt$', '_result.txt'
+    $folderName = Split-Path -Path $FolderPath -Leaf
+    $outputPath = Join-Path $helperFolder ($folderName + '_result.txt')
 
-    try {
-        $request = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
-    }
-    catch {
-        Write-RunLine $outputPath ("ERROR: COULD NOT READ REQUEST FILE: {0}" -f $_.Exception.Message)
-        Remove-Item -Path $RequestPath -ErrorAction SilentlyContinue
+    Remove-Item -Path $FolderPath -ErrorAction SilentlyContinue
+
+    $parts = $folderName -split '__'
+
+    if ($parts.Count -ne 6) {
+        Write-RunLine $outputPath ("ERROR: REQUEST FOLDER NAME DOES NOT MATCH Action__User__Client__Date__ReportType__Timestamp: {0}" -f $folderName)
         return
     }
 
-    Remove-Item -Path $RequestPath -ErrorAction SilentlyContinue
+    $action     = $parts[0]
+    $client     = $parts[2]
+    $date       = $parts[3] -replace '-', '/'
+    $reportType = $parts[4]
 
-    if ($request.action -ne 'UpdateAA') {
-        Write-RunLine $outputPath ("ERROR: UNKNOWN ACTION: {0}" -f $request.action)
+    if ($action -ne 'UpdateAA') {
+        Write-RunLine $outputPath ("ERROR: UNKNOWN ACTION: {0}" -f $action)
         return
     }
 
-    if ([string]::IsNullOrWhiteSpace($request.client)) {
+    if ([string]::IsNullOrWhiteSpace($client)) {
         Write-RunLine $outputPath "ERROR: NO CLIENT NAME IN REQUEST"
         return
     }
 
     try {
-        [datetime]::ParseExact($request.date, 'M/d/yyyy', $null) | Out-Null
+        [datetime]::ParseExact($date, 'M/d/yyyy', $null) | Out-Null
     }
     catch {
-        Write-RunLine $outputPath ("ERROR: INVALID DATE (EXPECTED M/D/YYYY): {0}" -f $request.date)
+        Write-RunLine $outputPath ("ERROR: INVALID DATE (EXPECTED M-D-YYYY): {0}" -f $parts[3])
         return
     }
 
-    if ($request.reportType -notin @('Quarterly', 'Monthly')) {
-        Write-RunLine $outputPath ("ERROR: INVALID REPORT TYPE (EXPECTED QUARTERLY OR MONTHLY): {0}" -f $request.reportType)
+    if ($reportType -notin @('Quarterly', 'Monthly')) {
+        Write-RunLine $outputPath ("ERROR: INVALID REPORT TYPE (EXPECTED QUARTERLY OR MONTHLY): {0}" -f $reportType)
         return
     }
 
-    $clientArg = ([string]$request.client).Replace("'", "''")
-    $psCmd = "& '$updateAAScriptPath' -AccessDatabasePath '$AccessDatabasePath' -DateNewReport '$($request.date)' -ClientNames '$clientArg' -ReportType '$($request.reportType)' 2>&1"
+    $clientArg = $client.Replace("'", "''")
+    $psCmd = "& '$updateAAScriptPath' -AccessDatabasePath '$AccessDatabasePath' -DateNewReport '$date' -ClientNames '$clientArg' -ReportType '$reportType' 2>&1"
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $psCmd 2>&1 | ForEach-Object {
         Write-RunLine $outputPath ([string]$_)
@@ -104,15 +109,20 @@ if ([string]::IsNullOrWhiteSpace($helperFolder) -or -not (Test-Path $helperFolde
     exit
 }
 
-$watcher = New-Object System.IO.FileSystemWatcher $helperFolder, '*_request.txt'
+$watcher = New-Object System.IO.FileSystemWatcher $helperFolder
+$watcher.NotifyFilter = [System.IO.NotifyFilters]::DirectoryName
 
 Write-Host "Watching $helperFolder for requests. Press Stop to end."
 
 while ($true) {
-    foreach ($file in (Get-ChildItem -Path $helperFolder -Filter '*_request.txt' | Sort-Object CreationTime)) {
+    $requestFolders = Get-ChildItem -Path $helperFolder -Directory |
+        Where-Object { -not (Get-ChildItem -Path $_.FullName -Force) } |
+        Sort-Object CreationTime
+
+    foreach ($folder in $requestFolders) {
         Start-Sleep -Seconds 2
-        if (Test-Path $file.FullName) {
-            Invoke-Request -RequestPath $file.FullName
+        if (Test-Path $folder.FullName) {
+            Invoke-Request -FolderPath $folder.FullName
         }
     }
 
