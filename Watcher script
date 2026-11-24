@@ -120,7 +120,7 @@ while ($true) {
         Sort-Object CreationTime
 
     foreach ($folder in $requestFolders) {
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 15
         if (Test-Path $folder.FullName) {
             Invoke-Request -FolderPath $folder.FullName
         }
