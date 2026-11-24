@@ -2,6 +2,8 @@
 
 $AccessDatabasePath = "C:\Path\To\Your\Database.accdb"   # <-- Update this path
 
+Add-Type -AssemblyName Microsoft.VisualBasic
+
 # Reads a single Variable Value from the Access Settings table
 function Get-Setting {
     param([string]$Name)
@@ -51,13 +53,16 @@ function Invoke-Request {
     $folderName = Split-Path -Path $FolderPath -Leaf
     $outputPath = Join-Path $helperFolder ($folderName + '_result.txt')
 
+    $deleteError = $null
     try {
-        [System.IO.Directory]::Delete($FolderPath)
+        [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($FolderPath, 'OnlyErrorDialogs', 'DeletePermanently')
     }
-    catch {}
+    catch {
+        $deleteError = $_.Exception.Message
+    }
 
     if (Test-Path $FolderPath) {
-        Write-RunLine $outputPath ("ERROR: COULD NOT DELETE REQUEST FOLDER - WATCHER STOPPED: {0}" -f $folderName)
+        Write-RunLine $outputPath ("ERROR: COULD NOT DELETE REQUEST FOLDER - WATCHER STOPPED: {0} ({1})" -f $folderName, $deleteError)
         exit
     }
 
