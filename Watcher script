@@ -45,6 +45,23 @@ function Write-RunLine {
     Add-Content -Path $OutputPath -Value $Line -Encoding UTF8
 }
 
+# Returns the request time from the folder name's last part (yyyyMMdd-HHmmss), or $null if the name doesn't match the pattern
+function Get-RequestTime {
+    param([string]$FolderName)
+
+    $parts = $FolderName -split '__'
+    if ($parts.Count -ne 6) {
+        return $null
+    }
+
+    try {
+        return [datetime]::ParseExact($parts[5], 'yyyyMMdd-HHmmss', $null)
+    }
+    catch {
+        return $null
+    }
+}
+
 # Reads one request folder's name, removes the folder, validates its values, and runs the requested action
 # Folder name pattern: Action__User__Client__Date(M-D-YYYY)__ReportType__Timestamp
 function Invoke-Request {
@@ -125,11 +142,19 @@ if ([string]::IsNullOrWhiteSpace($helperFolder) -or -not (Test-Path $helperFolde
 $watcher = New-Object System.IO.FileSystemWatcher $helperFolder
 $watcher.NotifyFilter = [System.IO.NotifyFilters]::DirectoryName
 
+$watcherStart = Get-Date
+
 Write-Host "Watching $helperFolder for requests. Press Stop to end."
 
 while ($true) {
     $requestFolders = Get-ChildItem -Path $helperFolder -Directory |
-        Where-Object { -not (Get-ChildItem -Path $_.FullName -Force) } |
+        Where-Object {
+            $requestTime = Get-RequestTime $_.Name
+            $requestTime -and
+            $requestTime -ge $watcherStart -and
+            -not (Test-Path (Join-Path $helperFolder ($_.Name + '_result.txt'))) -and
+            -not (Get-ChildItem -Path $_.FullName -Force)
+        } |
         Sort-Object CreationTime
 
     foreach ($folder in $requestFolders) {
