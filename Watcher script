@@ -1,4 +1,6 @@
-# Watcher - Step 3: watches the Helpers folder for request folders (values in the folder name) and runs Update AA
+# Watcher - Step 3: watches the Helpers folder for request folders (values in the folder name) and runs the requested action
+#   UpdateAA__User__Client__Date(M-D-YYYY)__ReportType__Timestamp
+#   AccessRefresh__User__Timestamp
 
 $AccessDatabasePath = "C:\Path\To\Your\Database.accdb"   # <-- Update this path
 
@@ -50,20 +52,111 @@ function Get-RequestTime {
     param([string]$FolderName)
 
     $parts = $FolderName -split '__'
-    if ($parts.Count -ne 6) {
+    if ($parts.Count -lt 3) {
         return $null
     }
 
     try {
-        return [datetime]::ParseExact($parts[5], 'yyyyMMdd-HHmmss', $null)
+        return [datetime]::ParseExact($parts[-1], 'yyyyMMdd-HHmmss', $null)
     }
     catch {
         return $null
     }
 }
 
-# Reads one request folder's name, removes the folder, validates its values, and runs the requested action
-# Folder name pattern: Action__User__Client__Date(M-D-YYYY)__ReportType__Timestamp
+# Exports the Quarterly and Monthly Report Data tables to the client data workbook (skips if refreshed within 5 minutes)
+function Invoke-AccessRefresh {
+    param([string]$OutputPath)
+
+    if ([string]::IsNullOrWhiteSpace($clientDataPath)) {
+        Write-RunLine $OutputPath "ERROR: WATCHER CLIENT DATA PATH IS BLANK IN SETTINGS"
+        return
+    }
+
+    if (Test-Path $clientDataPath) {
+        $lastRefresh = (Get-Item $clientDataPath).LastWriteTime
+
+        if (((Get-Date) - $lastRefresh).TotalMinutes -lt 5) {
+            Write-RunLine $OutputPath ("Client data already current (last refreshed {0})" -f $lastRefresh)
+            return
+        }
+
+        try {
+            [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($clientDataPath, 'OnlyErrorDialogs', 'DeletePermanently')
+        }
+        catch {
+            Write-RunLine $OutputPath ("ERROR: COULD NOT REPLACE CLIENT DATA FILE (IS IT OPEN?): {0}" -f $_.Exception.Message)
+            return
+        }
+    }
+
+    $tables = [ordered]@{
+        'Quarterly' = 'Report Data - Quarterly'
+        'Monthly'   = 'Report Data - Monthly'
+    }
+
+    $connection = $null
+
+    try {
+        $connection = New-Object -ComObject ADODB.Connection
+        $connection.Open("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$AccessDatabasePath")
+
+        foreach ($sheet in $tables.Keys) {
+            $sql = "SELECT * INTO [Excel 12.0 Xml;HDR=YES;Database=$clientDataPath].[$sheet] FROM [$($tables[$sheet])]"
+            $connection.Execute($sql) | Out-Null
+        }
+
+        Write-RunLine $OutputPath ("Client data refreshed: {0}" -f $clientDataPath)
+    }
+    catch {
+        Write-RunLine $OutputPath ("ERROR: CLIENT DATA REFRESH FAILED: {0}" -f $_.Exception.Message)
+    }
+    finally {
+        try { if ($connection -and $connection.State -eq 1) { $connection.Close() } } catch {}
+        if ($connection) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($connection) | Out-Null } catch {} }
+    }
+}
+
+# Runs Update AA for one client
+function Invoke-UpdateAA {
+    param([string]$OutputPath, [string[]]$Parts)
+
+    if ($Parts.Count -ne 6) {
+        Write-RunLine $OutputPath ("ERROR: REQUEST FOLDER NAME DOES NOT MATCH UpdateAA__User__Client__Date__ReportType__Timestamp: {0}" -f ($Parts -join '__'))
+        return
+    }
+
+    $client     = $Parts[2]
+    $date       = $Parts[3] -replace '-', '/'
+    $reportType = $Parts[4]
+
+    if ([string]::IsNullOrWhiteSpace($client)) {
+        Write-RunLine $OutputPath "ERROR: NO CLIENT NAME IN REQUEST"
+        return
+    }
+
+    try {
+        [datetime]::ParseExact($date, 'M/d/yyyy', $null) | Out-Null
+    }
+    catch {
+        Write-RunLine $OutputPath ("ERROR: INVALID DATE (EXPECTED M-D-YYYY): {0}" -f $Parts[3])
+        return
+    }
+
+    if ($reportType -notin @('Quarterly', 'Monthly')) {
+        Write-RunLine $OutputPath ("ERROR: INVALID REPORT TYPE (EXPECTED QUARTERLY OR MONTHLY): {0}" -f $reportType)
+        return
+    }
+
+    $clientArg = $client.Replace("'", "''")
+    $psCmd = "& '$updateAAScriptPath' -AccessDatabasePath '$AccessDatabasePath' -DateNewReport '$date' -ClientNames '$clientArg' -ReportType '$reportType' 2>&1"
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $psCmd 2>&1 | ForEach-Object {
+        Write-RunLine $OutputPath ([string]$_)
+    }
+}
+
+# Reads one request folder's name, removes the folder, and runs the requested action
 function Invoke-Request {
     param([string]$FolderPath)
 
@@ -85,49 +178,23 @@ function Invoke-Request {
 
     $parts = $folderName -split '__'
 
-    if ($parts.Count -ne 6) {
-        Write-RunLine $outputPath ("ERROR: REQUEST FOLDER NAME DOES NOT MATCH Action__User__Client__Date__ReportType__Timestamp: {0}" -f $folderName)
-        return
-    }
-
-    $action     = $parts[0]
-    $client     = $parts[2]
-    $date       = $parts[3] -replace '-', '/'
-    $reportType = $parts[4]
-
-    if ($action -ne 'UpdateAA') {
-        Write-RunLine $outputPath ("ERROR: UNKNOWN ACTION: {0}" -f $action)
-        return
-    }
-
-    if ([string]::IsNullOrWhiteSpace($client)) {
-        Write-RunLine $outputPath "ERROR: NO CLIENT NAME IN REQUEST"
-        return
-    }
-
-    try {
-        [datetime]::ParseExact($date, 'M/d/yyyy', $null) | Out-Null
-    }
-    catch {
-        Write-RunLine $outputPath ("ERROR: INVALID DATE (EXPECTED M-D-YYYY): {0}" -f $parts[3])
-        return
-    }
-
-    if ($reportType -notin @('Quarterly', 'Monthly')) {
-        Write-RunLine $outputPath ("ERROR: INVALID REPORT TYPE (EXPECTED QUARTERLY OR MONTHLY): {0}" -f $reportType)
-        return
-    }
-
-    $clientArg = $client.Replace("'", "''")
-    $psCmd = "& '$updateAAScriptPath' -AccessDatabasePath '$AccessDatabasePath' -DateNewReport '$date' -ClientNames '$clientArg' -ReportType '$reportType' 2>&1"
-
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $psCmd 2>&1 | ForEach-Object {
-        Write-RunLine $outputPath ([string]$_)
+    switch ($parts[0]) {
+        'UpdateAA'      { Invoke-UpdateAA -OutputPath $outputPath -Parts $parts }
+        'AccessRefresh' {
+            if ($parts.Count -ne 3) {
+                Write-RunLine $outputPath ("ERROR: REQUEST FOLDER NAME DOES NOT MATCH AccessRefresh__User__Timestamp: {0}" -f $folderName)
+            }
+            else {
+                Invoke-AccessRefresh -OutputPath $outputPath
+            }
+        }
+        default         { Write-RunLine $outputPath ("ERROR: UNKNOWN ACTION: {0}" -f $parts[0]) }
     }
 }
 
 $updateAAScriptPath = Get-Setting 'Interface Button Update AA'
 $helperFolder       = Get-Setting 'Watcher Helper'
+$clientDataPath     = Get-Setting 'Watcher Client Data'
 
 if ([string]::IsNullOrWhiteSpace($updateAAScriptPath) -or -not (Test-Path $updateAAScriptPath)) {
     Write-Host "Update AA script path is blank or not found: $updateAAScriptPath"
