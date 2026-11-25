@@ -152,8 +152,7 @@ while ($true) {
             $requestTime = Get-RequestTime $_.Name
             $requestTime -and
             $requestTime -ge $watcherStart -and
-            -not (Test-Path (Join-Path $helperFolder ($_.Name + '_result.txt'))) -and
-            -not (Get-ChildItem -Path $_.FullName -Force)
+            -not (Test-Path (Join-Path $helperFolder ($_.Name + '_result.txt')))
         } |
         Sort-Object CreationTime
 
