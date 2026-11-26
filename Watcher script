@@ -64,7 +64,7 @@ function Get-RequestTime {
     }
 }
 
-# Exports the Quarterly and Monthly Report Data tables to the client data workbook (skips if refreshed within 5 minutes)
+# Exports the Quarterly and Monthly Report Data tables to the client data workbook
 function Invoke-AccessRefresh {
     param([string]$OutputPath)
 
@@ -74,13 +74,6 @@ function Invoke-AccessRefresh {
     }
 
     if (Test-Path $clientDataPath) {
-        $lastRefresh = (Get-Item $clientDataPath).LastWriteTime
-
-        if (((Get-Date) - $lastRefresh).TotalMinutes -lt 5) {
-            Write-RunLine $OutputPath ("Client data already current (last refreshed {0})" -f $lastRefresh)
-            return
-        }
-
         try {
             [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($clientDataPath, 'OnlyErrorDialogs', 'DeletePermanently')
         }
