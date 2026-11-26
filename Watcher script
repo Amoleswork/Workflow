@@ -64,7 +64,8 @@ function Get-RequestTime {
     }
 }
 
-# Exports the Quarterly and Monthly Report Data tables to the client data workbook
+# Exports every column of the Quarterly and Monthly Report Data tables (as text) to a temporary workbook,
+# then replaces the client data workbook only if the export succeeded
 function Invoke-AccessRefresh {
     param([string]$OutputPath)
 
@@ -73,40 +74,58 @@ function Invoke-AccessRefresh {
         return
     }
 
-    if (Test-Path $clientDataPath) {
-        try {
-            [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($clientDataPath, 'OnlyErrorDialogs', 'DeletePermanently')
-        }
-        catch {
-            Write-RunLine $OutputPath ("ERROR: COULD NOT REPLACE CLIENT DATA FILE (IS IT OPEN?): {0}" -f $_.Exception.Message)
-            return
-        }
-    }
-
     $tables = [ordered]@{
         'Quarterly' = 'Report Data - Quarterly'
         'Monthly'   = 'Report Data - Monthly'
     }
 
+    $tempPath   = Join-Path $env:TEMP ("ReportDataCopy_{0}.xlsx" -f [guid]::NewGuid().ToString('N'))
     $connection = $null
+    $recordset  = $null
+    $exported   = $false
 
     try {
         $connection = New-Object -ComObject ADODB.Connection
         $connection.Open("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$AccessDatabasePath")
 
         foreach ($sheet in $tables.Keys) {
-            $sql = "SELECT * INTO [Excel 12.0 Xml;HDR=YES;Database=$clientDataPath].[$sheet] FROM [$($tables[$sheet])]"
+            $recordset = New-Object -ComObject ADODB.Recordset
+            $recordset.Open("SELECT * FROM [$($tables[$sheet])] WHERE 1=0", $connection)
+            $columns = foreach ($field in $recordset.Fields) { "[{0}] & '' AS [{0}]" -f $field.Name }
+            $recordset.Close()
+
+            $sql = "SELECT {0} INTO [Excel 12.0 Xml;HDR=YES;Database={1}].[{2}] FROM [{3}]" -f ($columns -join ', '), $tempPath, $sheet, $tables[$sheet]
             $connection.Execute($sql) | Out-Null
         }
 
+        $exported = $true
+    }
+    catch {
+        Write-RunLine $OutputPath ("ERROR: CLIENT DATA REFRESH FAILED (EXISTING COPY LEFT UNCHANGED): {0}" -f $_.Exception.Message)
+    }
+    finally {
+        try { if ($recordset -and $recordset.State -eq 1) { $recordset.Close() } } catch {}
+        try { if ($connection -and $connection.State -eq 1) { $connection.Close() } } catch {}
+
+        if ($recordset)  { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset) | Out-Null } catch {} }
+        if ($connection) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($connection) | Out-Null } catch {} }
+    }
+
+    if (-not $exported) {
+        Remove-Item -Path $tempPath -ErrorAction SilentlyContinue
+        return
+    }
+
+    try {
+        if (Test-Path $clientDataPath) {
+            [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($clientDataPath, 'OnlyErrorDialogs', 'DeletePermanently')
+        }
+        Move-Item -Path $tempPath -Destination $clientDataPath -ErrorAction Stop
         Write-RunLine $OutputPath ("Client data refreshed: {0}" -f $clientDataPath)
     }
     catch {
-        Write-RunLine $OutputPath ("ERROR: CLIENT DATA REFRESH FAILED: {0}" -f $_.Exception.Message)
-    }
-    finally {
-        try { if ($connection -and $connection.State -eq 1) { $connection.Close() } } catch {}
-        if ($connection) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($connection) | Out-Null } catch {} }
+        Write-RunLine $OutputPath ("ERROR: COULD NOT REPLACE CLIENT DATA FILE (IS IT OPEN?): {0}" -f $_.Exception.Message)
+        Remove-Item -Path $tempPath -ErrorAction SilentlyContinue
     }
 }
 
