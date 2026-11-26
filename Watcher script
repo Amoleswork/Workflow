@@ -64,8 +64,8 @@ function Get-RequestTime {
     }
 }
 
-# Exports every column of the Quarterly and Monthly Report Data tables (as text) to a temporary workbook,
-# then replaces the client data workbook only if the export succeeded
+# Reads every column of the Quarterly and Monthly Report Data tables (plain SELECT, works with Access open),
+# writes them as text to a temporary workbook, then replaces the client data workbook only if that succeeded
 function Invoke-AccessRefresh {
     param([string]$OutputPath)
 
@@ -80,22 +80,44 @@ function Invoke-AccessRefresh {
     }
 
     $tempPath   = Join-Path $env:TEMP ("ReportDataCopy_{0}.xlsx" -f [guid]::NewGuid().ToString('N'))
-    $connection = $null
+    $accessConn = $null
+    $excelConn  = $null
     $recordset  = $null
     $exported   = $false
 
     try {
-        $connection = New-Object -ComObject ADODB.Connection
-        $connection.Open("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$AccessDatabasePath")
+        $accessConn = New-Object -ComObject ADODB.Connection
+        $accessConn.Open("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$AccessDatabasePath")
+
+        $excelConn = New-Object -ComObject ADODB.Connection
+        $excelConn.Open("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$tempPath;Extended Properties=`"Excel 12.0 Xml;HDR=YES`"")
 
         foreach ($sheet in $tables.Keys) {
             $recordset = New-Object -ComObject ADODB.Recordset
-            $recordset.Open("SELECT * FROM [$($tables[$sheet])] WHERE 1=0", $connection)
-            $columns = foreach ($field in $recordset.Fields) { "[{0}] & '' AS [{0}]" -f $field.Name }
-            $recordset.Close()
+            $recordset.Open("SELECT * FROM [$($tables[$sheet])]", $accessConn)
 
-            $sql = "SELECT {0} INTO [Excel 12.0 Xml;HDR=YES;Database={1}].[{2}] FROM [{3}]" -f ($columns -join ', '), $tempPath, $sheet, $tables[$sheet]
-            $connection.Execute($sql) | Out-Null
+            $fieldNames = @(foreach ($field in $recordset.Fields) { $field.Name })
+            $columnDefs = ($fieldNames | ForEach-Object { "[{0}] MEMO" -f $_ }) -join ', '
+            $columnList = ($fieldNames | ForEach-Object { "[{0}]" -f $_ }) -join ', '
+
+            $excelConn.Execute("CREATE TABLE [$sheet] ($columnDefs)") | Out-Null
+
+            while (-not $recordset.EOF) {
+                $values = foreach ($name in $fieldNames) {
+                    $value = $recordset.Fields.Item($name).Value
+                    if ($null -eq $value -or $value -is [System.DBNull]) {
+                        "''"
+                    }
+                    else {
+                        "'" + ([string]$value).Replace("'", "''") + "'"
+                    }
+                }
+
+                $excelConn.Execute("INSERT INTO [$sheet] ($columnList) VALUES ($($values -join ', '))") | Out-Null
+                $recordset.MoveNext()
+            }
+
+            $recordset.Close()
         }
 
         $exported = $true
@@ -105,10 +127,12 @@ function Invoke-AccessRefresh {
     }
     finally {
         try { if ($recordset -and $recordset.State -eq 1) { $recordset.Close() } } catch {}
-        try { if ($connection -and $connection.State -eq 1) { $connection.Close() } } catch {}
+        try { if ($excelConn -and $excelConn.State -eq 1) { $excelConn.Close() } } catch {}
+        try { if ($accessConn -and $accessConn.State -eq 1) { $accessConn.Close() } } catch {}
 
         if ($recordset)  { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset) | Out-Null } catch {} }
-        if ($connection) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($connection) | Out-Null } catch {} }
+        if ($excelConn)  { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excelConn) | Out-Null } catch {} }
+        if ($accessConn) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($accessConn) | Out-Null } catch {} }
     }
 
     if (-not $exported) {
