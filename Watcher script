@@ -255,7 +255,6 @@ while ($true) {
 
     foreach ($folder in $requestFolders) {
         Write-Host ("Found folder: {0}" -f $folder.Name)
-        Start-Sleep -Seconds 0   # Troubleshooting delay: raise to give time to rename a hand-made request folder before it's handled
         if (Test-Path $folder.FullName) {
             Write-Host ("Handling request: {0}" -f $folder.Name)
             Invoke-Request -FolderPath $folder.FullName
