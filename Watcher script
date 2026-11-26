@@ -192,25 +192,15 @@ function Invoke-UpdateAA {
     }
 }
 
-# Reads one request folder's name, removes the folder, and runs the requested action
+# Runs the request named by the folder, then removes the folder
+# (the result file, written first, keeps a request from running twice even if the folder can't be removed)
 function Invoke-Request {
     param([string]$FolderPath)
 
     $folderName = Split-Path -Path $FolderPath -Leaf
     $outputPath = Join-Path $helperFolder ($folderName + '_result.txt')
 
-    $deleteError = $null
-    try {
-        [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($FolderPath, 'OnlyErrorDialogs', 'DeletePermanently')
-    }
-    catch {
-        $deleteError = $_.Exception.Message
-    }
-
-    if (Test-Path $FolderPath) {
-        Write-RunLine $outputPath ("ERROR: COULD NOT DELETE REQUEST FOLDER - WATCHER STOPPED: {0} ({1})" -f $folderName, $deleteError)
-        exit
-    }
+    Write-RunLine $outputPath ("Request started: {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
 
     $parts = $folderName -split '__'
 
@@ -225,6 +215,13 @@ function Invoke-Request {
             }
         }
         default         { Write-RunLine $outputPath ("ERROR: UNKNOWN ACTION: {0}" -f $parts[0]) }
+    }
+
+    try {
+        [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($FolderPath, 'OnlyErrorDialogs', 'DeletePermanently')
+    }
+    catch {
+        Write-RunLine $outputPath ("ERROR: COULD NOT DELETE REQUEST FOLDER (DELETE IT MANUALLY): {0} ({1})" -f $folderName, $_.Exception.Message)
     }
 }
 
@@ -242,9 +239,6 @@ if ([string]::IsNullOrWhiteSpace($helperFolder) -or -not (Test-Path $helperFolde
     exit
 }
 
-$watcher = New-Object System.IO.FileSystemWatcher $helperFolder
-$watcher.NotifyFilter = [System.IO.NotifyFilters]::DirectoryName
-
 $watcherStart = Get-Date
 
 Write-Host "Watching $helperFolder for requests. Press Stop to end."
@@ -260,13 +254,13 @@ while ($true) {
         Sort-Object CreationTime
 
     foreach ($folder in $requestFolders) {
-        Write-Host ("Found folder: {0} - waiting 15 seconds" -f $folder.Name)
-        Start-Sleep -Seconds 15
+        Write-Host ("Found folder: {0}" -f $folder.Name)
+        Start-Sleep -Seconds 0   # Troubleshooting delay: raise to give time to rename a hand-made request folder before it's handled
         if (Test-Path $folder.FullName) {
             Write-Host ("Handling request: {0}" -f $folder.Name)
             Invoke-Request -FolderPath $folder.FullName
         }
     }
 
-    $watcher.WaitForChanged([System.IO.WatcherChangeTypes]::Created, 1000) | Out-Null
+    Start-Sleep -Seconds 1   # Checks the Helpers folder for new requests about once a second
 }
