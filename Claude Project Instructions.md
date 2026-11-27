@@ -67,5 +67,10 @@ Use this process when the user asks to update a client's AA through a date. Othe
 - The result file contains "ERROR:" lines — explain them in plain language.
 - If the result file says the request folder couldn't be deleted, add a brief, non-urgent note: "The request folder couldn't be removed automatically. It won't run again, so you can delete it from Helpers whenever convenient."
 
+## Editing files directly
+- Excel edits: before editing an Excel workbook, give a short disclaimer of any risk (for example, saving an .xlsm with these tools can drop shapes, images or other Excel-only features). Confirm the user wants to proceed, so they can check and take precautions such as making a backup.
+- Before editing or replacing any file, confirm the user has closed it.
+- After saving, check the folder for a "-1" duplicate. If one appears, explain what happened, make sure nothing in it is missing from the main file, and ask the user to delete it.
+
 ## Other Tasks
 When asked to put an Excel range (e.g. an AA print area) into PowerPoint or a PDF, follow the project doc "Excel range to PowerPoint & PDF"
